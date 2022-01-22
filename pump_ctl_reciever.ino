@@ -6,8 +6,8 @@
 //datapin must be arduino digital pin 11
 
 //debug
-//#define LEVEL_VAR_TEST
-#define LCD_PRINT_MSG
+#define LEVEL_VAR_TEST
+// #define LCD_PRINT_MSG
 
 #ifdef LCD_PRINT_MSG
 #define LCD_UPDATE_INTERVAL_MS  4000
@@ -18,14 +18,14 @@ LiquidCrystal_I2C lcd(0x27, 16, 2); // I2C address 0x27, 16 column and 2 rows
 
 #define MOTOR_RELAY_PIN             9
 #define MOTOR_TOGGLE_BUTTON_PIN     10 // --- test button pin 8 on dev board
-
+#define TX_DATA_PIN                11
 #define ERROR_LAMP_PIN              13 // 6 to enable debug lamp
 #define POWER_LATCH_PIN             99 // not used
 
 
 #define MAX_RCV_ERRORS               5
-#define TANK_FULL_LEVEL             12
-#define TANK_EMPTY_LEVEL            50
+#define TANK_FULL_LEVEL             12  // tank full level
+#define TANK_EMPTY_LEVEL            50  // tank empty level
 #define TANK_ERROR_LEVEL            255
 #define MOTOR_BTN_STATE_OFF          0
 #define MOTOR_BTN_STATE_ON           1
@@ -43,6 +43,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2); // I2C address 0x27, 16 column and 2 rows
 
 
 RH_ASK wirelesComDriver;
+
 volatile float rx_data = 0;
 uint8_t rx_data_buflen = 4;
 uint8_t receptionErrCtr = 0;
@@ -61,10 +62,7 @@ typedef enum {
   RX_SIGNAL_LOST,
   MOTOR_RELAY_PIN_FAILURE,
   PUMP_FLOW_ERROR,
-  LEVEL_SENSOR_SPORADIC,
-
-
-
+  LEVEL_SENSOR_SPORADIC
 } sysErr_t;
 
 sysErr_t sysError;
@@ -77,6 +75,10 @@ void clearError(sysErr_t err);
 uint8_t fluidLevelPlausibilityTest(uint8_t level, uint8_t motorState);
 void shutdownSysOnCriticalError();
 
+
+/*
+ * lcd integration
+ */
 #ifdef LCD_PRINT_MSG
 void  intiLcd()
 {
@@ -128,7 +130,10 @@ void setup()
 
 
 
-
+/*
+ * 
+ * Task execution in loop
+ */
 
 void loop()
 {
@@ -141,7 +146,9 @@ void loop()
 
 
 
-// function to set status of user motor request, and store startime
+/* 
+ *  function to set status of user motor request, and store startime
+ */
 void setUserMotorRequest(uint8_t state) {
 
   if (state == MOTOR_BTN_STATE_ON)
@@ -158,15 +165,19 @@ void setUserMotorRequest(uint8_t state) {
 
 
 
-
+/*
+ * Ondemand motor state variable getter
+ */
 uint32_t getUserMotorRequestState() {
   return onUserDmdMotorRequestState;
 }
 
 
 
-
-// note: never leave button pin floating!
+/*
+ * Poll button pin state to detect keypress
+ * note: never leave button pin floating!
+*/
 void Task_getInputControls()
 {
   if (digitalRead(MOTOR_TOGGLE_BUTTON_PIN) == HIGH) {
@@ -205,6 +216,14 @@ void Task_getInputControls()
 }
 
 
+/*
+ * Control motor based on:
+ * tx data automatic
+ * user on demand request:
+ *  * when tx signal lost or failure
+ *  * on demand turn on followed byh automatic off
+ * detect level sensor/pump error
+ */
 
 
 void Task_motorDriver()
@@ -214,7 +233,7 @@ void Task_motorDriver()
   static uint32_t avg_sum;
   static uint8_t avgLevel = 255;
 
-  // level testing block
+  // level testing block thru serial
 #ifdef LEVEL_VAR_TEST
   if (Serial.available())
   {
@@ -224,6 +243,7 @@ void Task_motorDriver()
   ct++;
   if (ct % 1000 == 0)
 #else
+  //Reciever Enabled, reception processing
   //Serial.println("RCV CODE ON");
   if (wirelesComDriver.recv((uint8_t*)&rx_data, &rx_data_buflen)) // Non-blocking
 #endif
@@ -237,15 +257,13 @@ void Task_motorDriver()
     starTimeRXLastRcpt = millis();
     clearError(RX_SIGNAL_LOST);
 
-
-    if ((float)(TANK_FULL_LEVEL - 5) < rx_data && rx_data < (float)(TANK_EMPTY_LEVEL + 10)) // take samples only if value within range
+    // take samples for averaginh only if value within range
+    if ((float)(TANK_FULL_LEVEL - 5) < rx_data && rx_data < (float)(TANK_EMPTY_LEVEL + 10))
     {
       sampleCtr++;
       avg_sum += rx_data;
     }
 
-
-    // avg_sum += rx_data;
     if (sampleCtr == AVERAGE_SAMPLE_SIZE)
     {
       static uint8_t levelErrorCtr;
@@ -273,6 +291,7 @@ void Task_motorDriver()
           if (levelErrorCtr == SPORADIC_ERROR_MAX && motorState)
           {
             Serial.println("Level error on pump run.. shuting down..!");
+            setError(LEVEL_SENSOR_SPORADIC);
             delay(1000);
             shutdownSysOnCriticalError();
           }
@@ -286,8 +305,10 @@ void Task_motorDriver()
 
 
   }
+  // when no reception: idle-waiting/tx signal lost
   else
   {
+   
     isSignalGood = 0;//must be moved to a getter setter
     uint32_t pastime = millis() - starTimeRXLastRcpt;
     static uint16_t userReqMotorOnTimeSec;
@@ -295,9 +316,6 @@ void Task_motorDriver()
     {
       receptionErrCtr = receptionErrCtr >= MAX_RCV_ERRORS ? MAX_RCV_ERRORS : receptionErrCtr + 1;
       rx_data = (double)TANK_ERROR_LEVEL;
-
-
-      //Serial.println("Motor shut off due to error");
 
     }
 
@@ -368,7 +386,10 @@ void Task_motorDriver()
     }
 
   }
-
+/*
+ * 
+ * Motor state contol based on tx data
+ */
   if (isSignalGood)
   {
     if ((int)rx_data > TANK_EMPTY_LEVEL)
@@ -387,6 +408,9 @@ void Task_motorDriver()
     {
     }
   }
+
+
+  
   //  static uint64_t lcdUpdElapsed;
   //  if (millis() - lcdUpdElapsed > 2000) {
   //    uint8_t percLevel = (uint8_t)(uint32_t)((1 - ( (float)(55 - TANK_FULL_LEVEL) / (TANK_EMPTY_LEVEL - TANK_FULL_LEVEL))) * 100);
@@ -394,6 +418,10 @@ void Task_motorDriver()
   //
   //    lcdUpdElapsed = millis();
   //  }
+
+/*  
+ *   LCD data formatting information*/
+ 
 #ifdef LCD_PRINT_MSG
   // Serial.println("LCD");
   static uint64_t lcdUpdElapsed;
@@ -458,7 +486,11 @@ void Task_motorDriver()
 }
 
 
-
+/*
+ * 
+ * error lamp control based on errors set
+ * 
+ */
 
 
 void Task_setSysStatusLamp()
@@ -550,7 +582,13 @@ void clearError(sysErr_t err)
 
 
 
-
+/*
+ * 
+ * 
+ * level variation plausibility check
+ * detect sensor/pump error
+ * 
+ */
 
 
 uint8_t fluidLevelPlausibilityTest(uint8_t level, uint8_t motorState)
@@ -618,6 +656,13 @@ uint8_t fluidLevelPlausibilityTest(uint8_t level, uint8_t motorState)
 }
 
 
+
+/*
+ * 
+ * 
+ * shutdown system/pump on critical error
+ * 
+ */
 
 
 void shutdownSysOnCriticalError()
