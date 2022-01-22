@@ -25,7 +25,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2); // I2C address 0x27, 16 column and 2 rows
 
 #define MAX_RCV_ERRORS               5
 #define TANK_FULL_LEVEL             12
-#define TANK_EMPTY_LEVEL            60
+#define TANK_EMPTY_LEVEL            50
 #define TANK_ERROR_LEVEL            255
 #define MOTOR_BTN_STATE_OFF          0
 #define MOTOR_BTN_STATE_ON           1
