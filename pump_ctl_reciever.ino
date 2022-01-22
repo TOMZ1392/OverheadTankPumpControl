@@ -7,18 +7,26 @@
 
 //debug
 //#define LEVEL_VAR_TEST
+#define LCD_PRINT_MSG
+
+#ifdef LCD_PRINT_MSG
+#define LCD_UPDATE_INTERVAL_MS  4000
+#include <LiquidCrystal_I2C.h>
+LiquidCrystal_I2C lcd(0x27, 16, 2); // I2C address 0x27, 16 column and 2 rows
+#endif
+
 
 #define MOTOR_RELAY_PIN             9
 #define MOTOR_TOGGLE_BUTTON_PIN     10 // --- test button pin 8 on dev board
 
-#define ERROR_LAMP_PIN              6
-#define POWER_LATCH_PIN             13
+#define ERROR_LAMP_PIN              13 // 6 to enable debug lamp
+#define POWER_LATCH_PIN             99 // not used
 
 
 #define MAX_RCV_ERRORS               5
-#define TANK_FULL_LEVEL             15
-#define TANK_EMPTY_LEVEL            50
-#define TANK_ERROR_LEVEL            255 
+#define TANK_FULL_LEVEL             12
+#define TANK_EMPTY_LEVEL            60
+#define TANK_ERROR_LEVEL            255
 #define MOTOR_BTN_STATE_OFF          0
 #define MOTOR_BTN_STATE_ON           1
 #define BTN_ANTI_DEBOUNCE_PERIOD    800
@@ -49,13 +57,13 @@ volatile uint32_t userMotorRequestStartTime = 0;
 
 
 typedef enum {
-  NO_ERROR=0,
+  NO_ERROR = 0,
   RX_SIGNAL_LOST,
   MOTOR_RELAY_PIN_FAILURE,
   PUMP_FLOW_ERROR,
   LEVEL_SENSOR_SPORADIC,
-  
-  
+
+
 
 } sysErr_t;
 
@@ -69,19 +77,42 @@ void clearError(sysErr_t err);
 uint8_t fluidLevelPlausibilityTest(uint8_t level, uint8_t motorState);
 void shutdownSysOnCriticalError();
 
+#ifdef LCD_PRINT_MSG
+void  intiLcd()
+{
+  lcd.init(); // initialize the lcd
+  lcd.backlight();
 
+  lcd.setCursor(0, 0);         // move cursor to   (0, 0)
+  lcd.print("Pump Controller");        // print message at (0, 0)
+  lcd.setCursor(0, 1);         // move cursor to   (2, 1)
+  lcd.print("initializing.."); // print message at (2, 1)
+  delay(2000);
+  lcd.clear();
+  //lcd.noBacklight();
+}
 
+void lcdPrintLines(String line1, String line2)
+{
+  lcd.clear();
+  lcd.setCursor(0, 0);         // move cursor to   (0, 0)
+  lcd.print(line1);        // print message at (0, 0)
+  lcd.setCursor(0, 1);         // move cursor to   (2, 1)
+  lcd.print(line2); // print message at (2, 1)
+}
+
+#endif
 
 void setup()
 {
   Serial.begin(9600);  // Debugging only
   pinMode(MOTOR_RELAY_PIN, OUTPUT);
   pinMode(ERROR_LAMP_PIN, OUTPUT);
-  pinMode(POWER_LATCH_PIN, OUTPUT);
+  // pinMode(POWER_LATCH_PIN, OUTPUT);
   pinMode(MOTOR_TOGGLE_BUTTON_PIN, INPUT);
   digitalWrite(MOTOR_RELAY_PIN, LOW);
   delay(200);
-  digitalWrite(POWER_LATCH_PIN, HIGH);
+  //digitalWrite(POWER_LATCH_PIN, HIGH);
   Serial.println("Starting...");
   if (!wirelesComDriver.init())
     Serial.println("RX init failed..!!");
@@ -89,6 +120,10 @@ void setup()
   {
     Serial.println("RX init ready..");
   }
+
+#ifdef LCD_PRINT_MSG
+  intiLcd();
+#endif;
 }
 
 
@@ -201,16 +236,16 @@ void Task_motorDriver()
     isSignalGood = 1;
     starTimeRXLastRcpt = millis();
     clearError(RX_SIGNAL_LOST);
-    
-    
-    if ((float)(TANK_FULL_LEVEL - 10) < rx_data && rx_data < (float)(TANK_EMPTY_LEVEL + 10)) // take samples only if value within range
+
+
+    if ((float)(TANK_FULL_LEVEL - 5) < rx_data && rx_data < (float)(TANK_EMPTY_LEVEL + 10)) // take samples only if value within range
     {
       sampleCtr++;
       avg_sum += rx_data;
     }
 
- 
-     // avg_sum += rx_data;
+
+    // avg_sum += rx_data;
     if (sampleCtr == AVERAGE_SAMPLE_SIZE)
     {
       static uint8_t levelErrorCtr;
@@ -308,13 +343,13 @@ void Task_motorDriver()
     {
       digitalWrite(MOTOR_RELAY_PIN, HIGH);
       Serial.println("Motor running on demand! on signal good");
-      
+
     }
     else if (isSignalGood && !motorState)
     {
       digitalWrite(MOTOR_RELAY_PIN, LOW);
       Serial.println("Motor shutoff on demand!on signal good");
-       // on deman shutoff should override level sensor value
+      // on deman shutoff should override level sensor value
     }
     else if (!isSignalGood)
     {
@@ -352,6 +387,74 @@ void Task_motorDriver()
     {
     }
   }
+  //  static uint64_t lcdUpdElapsed;
+  //  if (millis() - lcdUpdElapsed > 2000) {
+  //    uint8_t percLevel = (uint8_t)(uint32_t)((1 - ( (float)(55 - TANK_FULL_LEVEL) / (TANK_EMPTY_LEVEL - TANK_FULL_LEVEL))) * 100);
+  //    Serial.println(percLevel);
+  //
+  //    lcdUpdElapsed = millis();
+  //  }
+#ifdef LCD_PRINT_MSG
+  // Serial.println("LCD");
+  static uint64_t lcdUpdElapsed;
+  if (millis() - lcdUpdElapsed > LCD_UPDATE_INTERVAL_MS)
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Level:");
+    lcd.setCursor(7, 0);
+    float percLevel = 1 - ( (float)(avgLevel - TANK_FULL_LEVEL) / (TANK_EMPTY_LEVEL - TANK_FULL_LEVEL));
+    if (avgLevel > TANK_EMPTY_LEVEL)
+    {
+      percLevel = 0;
+    }
+    lcd.print((uint8_t)(uint32_t)(percLevel * 100));
+
+    lcd.setCursor(10, 0);
+    lcd.print('%');
+
+
+
+    switch (sysError) {
+      case RX_SIGNAL_LOST:
+        lcd.setCursor(0, 1);
+        lcd.print("Error:");
+        lcd.setCursor(6, 1);
+        lcd.print("TX_LOST");
+        break;
+
+      case MOTOR_RELAY_PIN_FAILURE:
+        lcd.setCursor(0, 1);
+        lcd.print("Error:");
+        lcd.setCursor(6, 1);
+        lcd.print("RLY_PIN_F");
+        break;
+
+      case PUMP_FLOW_ERROR:
+        lcd.setCursor(0, 1);
+        lcd.print("Error:");
+        lcd.setCursor(6, 1);
+        lcd.print("PMP_F");
+        break;
+
+      case LEVEL_SENSOR_SPORADIC:
+        lcd.setCursor(0, 1);
+        lcd.print("Error:");
+        lcd.setCursor(6, 1);
+        lcd.print("SNSR_F");
+        break;
+
+      default:
+
+        lcd.setCursor(0, 1);
+        lcd.print(avgLevel);
+        lcd.setCursor(3, 1);
+        lcd.print("cm");
+        break;
+    }
+    lcdUpdElapsed = millis();
+  }
+#endif
 }
 
 
@@ -486,7 +589,7 @@ uint8_t fluidLevelPlausibilityTest(uint8_t level, uint8_t motorState)
   }
   else
   {
-    offStateLevelHist[onStateCtr] = level;
+    offStateLevelHist[offStateCtr] = level;
     offStateCtr++;
     if (offStateCtr == LEVEL_HISTORY_RECORD_SIZE)
     {
@@ -519,5 +622,12 @@ uint8_t fluidLevelPlausibilityTest(uint8_t level, uint8_t motorState)
 
 void shutdownSysOnCriticalError()
 {
-  digitalWrite(POWER_LATCH_PIN, LOW);
+#ifdef LCD_PRINT_MSG
+  lcd.clear();
+  lcd.setCursor(0, 1);
+  lcd.print("CRITICAL_ERR!!");
+#endif
+  digitalWrite(MOTOR_RELAY_PIN, LOW);
+  //while (1);
+  //digitalWrite(POWER_LATCH_PIN, LOW);
 }
